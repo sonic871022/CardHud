@@ -75,47 +75,69 @@ static void drawPageIndicator(Page p) {
   M5.Lcd.drawString("H:HELP", 26, 129);
 }
 
-// Full-screen modal help overlay. Drawn every frame while active (page
-// updates are frozen so the background stays still). Any key closes it.
-static void drawHelpOverlay() {
-  M5.Lcd.fillScreen(0x2124);              // dark gray, reads as "modal"
-  M5.Lcd.setFont(&fonts::Font0);
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setTextDatum(textdatum_t::middle_left);
+// Full-screen modal help overlay. Rendered into an offscreen sprite
+// (atomic push = no flicker). Content is taller than the screen, so it
+// scrolls with UP/DN arrows; H closes. Black background.
+static const struct HelpLine { const char* k; const char* d; bool head; } kHelp[] = {
+    {"CARHUD KEYS",  "",               true },
+    {"-- GLOBAL --", "",               true },
+    {"1/2/3 ARROW",  "switch page",    false},
+    {"R",            "zero tilt",      false},
+    {"S",            "GPS on/off",     false},
+    {"N",            "spectrum style", false},
+    {"-- MAP PAGE --","",              true },
+    {"G",            "record on/off",  false},
+    {"F",            "load/exit nav",  false},
+    {"UP/DN",        "select route",   false},
+    {"M",            "mark waypoint",  false},
+    {"X",            "waypoint list",  false},
+    {"DEL",          "delete route",   false},
+    {"ENTER",        "confirm",        false},
+};
+static const int kHelpN = sizeof(kHelp) / sizeof(kHelp[0]);
+static const int HELP_VIEW_H = 118;   // content viewport above the hint row
+
+static void drawHelpOverlay(int scrollPx) {
+  static M5Canvas help_{&M5.Lcd};
+  static bool built = false;
+  static int  renderedAt = -1;
+  if (!built) {
+    help_.setColorDepth(8);
+    help_.createSprite(240, 135);
+    built = true;
+  }
+  if (renderedAt == scrollPx) { help_.pushSprite(0, 0); return; }
+  renderedAt = scrollPx;
+
+  const uint16_t cBg   = 0x0000;          // pure black background
   const uint16_t cHead = 0xFD20;          // orange section headers
   const uint16_t cKey  = 0xFFE0;          // yellow key names
-  const uint16_t cDesc = 0xC638;          // dim descriptions
-  int y = 6;
-  auto head = [&](const char* s) {
-    M5.Lcd.setTextColor(cHead, 0x2124);
-    M5.Lcd.drawString(s, 6, y);  y += 10;
-  };
-  auto line = [&](const char* k, const char* d) {
-    M5.Lcd.setTextColor(cKey, 0x2124);
-    M5.Lcd.drawString(k, 6, y);
-    M5.Lcd.setTextColor(cDesc, 0x2124);
-    M5.Lcd.drawString(d, 88, y);
-    y += 10;
-  };
-  M5.Lcd.setTextColor(0xFFE0, 0x2124);
-  M5.Lcd.drawString("CARHUD KEYS", 6, y); y += 11;
-  head("-- GLOBAL --");
-  line("1/2/3 ARROW", "switch page");
-  line("R", "zero tilt");
-  line("S", "GPS on/off");
-  line("N", "spectrum style");
-  head("-- MAP PAGE --");
-  line("G", "record on/off");
-  line("F", "load/exit nav");
-  line("UP/DN", "select route");
-  line("M", "mark waypoint");
-  line("X", "waypoint list");
-  line("DEL", "delete route");
-  line("ENTER", "confirm");
-  y = 6;  // right column: title + close hint
-  M5.Lcd.setTextDatum(textdatum_t::middle_right);
-  M5.Lcd.setTextColor(0x5344, 0x2124);
-  M5.Lcd.drawString("ANY KEY CLOSES", 234, 129);
+  const uint16_t cDesc = 0x9CF3;          // dim descriptions
+  help_.fillScreen(cBg);
+  help_.setFont(&fonts::Font0);
+  help_.setTextSize(1);
+  help_.setTextDatum(textdatum_t::middle_left);
+  int y = 6 - scrollPx;
+  for (int i = 0; i < kHelpN; i++) {
+    if (y > -10 && y < HELP_VIEW_H) {
+      const HelpLine& L = kHelp[i];
+      if (L.head) {
+        help_.setTextColor(cHead, cBg);
+        help_.drawString(L.k, 6, y);
+      } else {
+        help_.setTextColor(cKey, cBg);
+        help_.drawString(L.k, 6, y);
+        help_.setTextColor(cDesc, cBg);
+        help_.drawString(L.d, 88, y);
+      }
+    }
+    y += (i == 0) ? 11 : 10;              // title row a bit taller
+  }
+  // footer hint row (fixed, always visible)
+  help_.setTextDatum(textdatum_t::middle_right);
+  help_.setTextColor(0x5344, cBg);
+  help_.drawString("H:CLOSE  UP/DN:SCROLL", 234, 129);
+  help_.pushSprite(0, 0);   // single atomic blit — no flicker
 }
 
 // The HUD page paints the sound strip at y104..135 via a full-screen sprite.
@@ -179,13 +201,21 @@ void loop() {
     }
   }
 
-  // ---- H-key help overlay (modal): any key closes, H opens ----
+  // ---- H-key help overlay (modal): H opens/closes, UP/DN scrolls ----
   static bool helpShow_ = false;
+  static int  helpScroll_ = 0;              // px offset into the help content
   if (helpShow_) {
-    if (kbEvent) helpShow_ = false;
+    if (kbEvent) {
+      // scroll first, then check for H to close
+      if (kb.up)   helpScroll_ = (helpScroll_ > 20) ? helpScroll_ - 20 : 0;
+      if (kb.down) helpScroll_ = (helpScroll_ < 10) ? 30 : helpScroll_ + 20;
+      if (helpScroll_ > 30) helpScroll_ = 30;
+      for (char c : kb.word)
+        if (c == 'h' || c == 'H') { helpShow_ = false; break; }
+    }
   } else if (kbEvent && !mapPage.isEntering() && kb.nword > 0) {
     for (char c : kb.word)
-      if (c == 'h' || c == 'H') { helpShow_ = true; break; }
+      if (c == 'h' || c == 'H') { helpShow_ = true; helpScroll_ = 0; break; }
   }
 
   // page switching (left/right arrows) — disabled while naming a waypoint
@@ -202,7 +232,7 @@ void loop() {
   }
 
   if (helpShow_) {
-    drawHelpOverlay();   // modal: page updates frozen, recording/GPS continue
+    drawHelpOverlay(helpScroll_);   // modal: page updates frozen, recording/GPS continue
   } else {
   switch (g_page) {
     case Page::HUD:
@@ -244,28 +274,4 @@ void loop() {
   // hiccup monitor: blame the whole loop only when no section was tagged
   uint32_t loopUs = micros() - loopT0;
   if (loopUs > 60000 && g_slowMs < loopStartMs) markSlow('H', loopUs);
-
-  // Keyboard raw-position debug line (bottom of stats page, drawn OVER the
-  // spectrum strip only while keys are held — release and the strip returns).
-  if (g_page == Page::STATS && !helpShow_) {
-    auto& kbd = M5Cardputer.Keyboard;
-    const auto& list = kbd.keyList();
-    if (list.size() > 0) {
-      M5.Lcd.setFont(&fonts::Font0);
-      M5.Lcd.setTextSize(1);
-      M5.Lcd.setTextDatum(textdatum_t::top_left);
-      M5.Lcd.fillRect(0, 117, 240, 11, 0x0000);
-      int px = 4;
-      for (size_t i = 0; i < list.size() && i < 3; i++) {
-        KeyValue_t v = kbd.getKeyValue(list[i]);
-        char seg[18];
-        snprintf(seg, sizeof(seg), "%d,%d:%02X/%02X", list[i].x, list[i].y,
-                 (uint8_t)v.value_first, (uint8_t)v.value_third);
-        M5.Lcd.setTextColor(0xFD20, 0x0000);
-        M5.Lcd.drawString(seg, px, 118);
-        px += strlen(seg) * 6 + 6;
-      }
-    }
-    // released: nothing to clear — the strip redraws next frame
-  }
 }
