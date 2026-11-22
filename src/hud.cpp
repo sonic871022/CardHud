@@ -455,20 +455,6 @@ void Hud::drawStripLcd() {
 void Hud::drawSpectrum() {
   drawStripInto(canvas_, WAVE_Y, 135 - WAVE_Y);
 
-  // live mic peak diagnostics (bottom-right corner, minimal overlap with the strip)
-  canvas_.setFont(&fonts::Font0);
-  canvas_.setTextSize(1);
-  canvas_.setTextDatum(textdatum_t::middle_right);
-  char buf[16];
-  if (recOk_) {
-    snprintf(buf, sizeof(buf), "P %5d", peak_);
-    canvas_.setTextColor(C_GRAY, C_BG);
-  } else {
-    snprintf(buf, sizeof(buf), "P fail");
-    canvas_.setTextColor(C_RED, C_BG);
-  }
-  canvas_.drawString(buf, 238, 129);
-
   // slow-section diagnostics: tag G=gnss R=record F=fft H=whole loop,
   // flashes for 3s (bottom-left, right of the page indicator)
   if (g_slowTag && millis() - g_slowMs < 3000) {
