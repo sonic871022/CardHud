@@ -70,6 +70,52 @@ static void drawPageIndicator(Page p) {
   snprintf(buf, sizeof(buf), "%d/3", (int)p + 1);
   M5.Lcd.setTextColor(0x8C71, 0x0000);
   M5.Lcd.drawString(buf, 4, 129);
+  // permanent help hint (gray, right of the page indicator)
+  M5.Lcd.setTextColor(0x5344, 0x0000);
+  M5.Lcd.drawString("H:HELP", 26, 129);
+}
+
+// Full-screen modal help overlay. Drawn every frame while active (page
+// updates are frozen so the background stays still). Any key closes it.
+static void drawHelpOverlay() {
+  M5.Lcd.fillScreen(0x2124);              // dark gray, reads as "modal"
+  M5.Lcd.setFont(&fonts::Font0);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextDatum(textdatum_t::middle_left);
+  const uint16_t cHead = 0xFD20;          // orange section headers
+  const uint16_t cKey  = 0xFFE0;          // yellow key names
+  const uint16_t cDesc = 0xC638;          // dim descriptions
+  int y = 6;
+  auto head = [&](const char* s) {
+    M5.Lcd.setTextColor(cHead, 0x2124);
+    M5.Lcd.drawString(s, 6, y);  y += 10;
+  };
+  auto line = [&](const char* k, const char* d) {
+    M5.Lcd.setTextColor(cKey, 0x2124);
+    M5.Lcd.drawString(k, 6, y);
+    M5.Lcd.setTextColor(cDesc, 0x2124);
+    M5.Lcd.drawString(d, 88, y);
+    y += 10;
+  };
+  M5.Lcd.setTextColor(0xFFE0, 0x2124);
+  M5.Lcd.drawString("CARHUD KEYS", 6, y); y += 11;
+  head("-- GLOBAL --");
+  line("1/2/3 ARROW", "switch page");
+  line("R", "zero tilt");
+  line("S", "GPS on/off");
+  line("N", "spectrum style");
+  head("-- MAP PAGE --");
+  line("G", "record on/off");
+  line("F", "load/exit nav");
+  line("UP/DN", "select route");
+  line("M", "mark waypoint");
+  line("X", "waypoint list");
+  line("DEL", "delete route");
+  line("ENTER", "confirm");
+  y = 6;  // right column: title + close hint
+  M5.Lcd.setTextDatum(textdatum_t::middle_right);
+  M5.Lcd.setTextColor(0x5344, 0x2124);
+  M5.Lcd.drawString("ANY KEY CLOSES", 234, 129);
 }
 
 // The HUD page paints the sound strip at y104..135 via a full-screen sprite.
@@ -133,8 +179,18 @@ void loop() {
     }
   }
 
+  // ---- H-key help overlay (modal): any key closes, H opens ----
+  static bool helpShow_ = false;
+  if (helpShow_) {
+    if (kbEvent) helpShow_ = false;
+  } else if (kbEvent && !mapPage.isEntering() && kb.nword > 0) {
+    for (char c : kb.word)
+      if (c == 'h' || c == 'H') { helpShow_ = true; break; }
+  }
+
   // page switching (left/right arrows) — disabled while naming a waypoint
-  if (!mapPage.isEntering() && (kb.left || kb.right)) {
+  // or while the help overlay is up
+  if (!helpShow_ && !mapPage.isEntering() && (kb.left || kb.right)) {
     Page old = g_page;
     if (kb.right) g_page = (Page)(((int)g_page + 1) % 3);
     if (kb.left)  g_page = (Page)(((int)g_page + 2) % 3);
@@ -145,6 +201,9 @@ void loop() {
     }
   }
 
+  if (helpShow_) {
+    drawHelpOverlay();   // modal: page updates frozen, recording/GPS continue
+  } else {
   switch (g_page) {
     case Page::HUD:
       hud.update(g);
@@ -180,6 +239,7 @@ void loop() {
   }
 
   drawPageIndicator(g_page);
+  }
 
   // hiccup monitor: blame the whole loop only when no section was tagged
   uint32_t loopUs = micros() - loopT0;
@@ -187,7 +247,7 @@ void loop() {
 
   // Keyboard raw-position debug line (bottom of stats page, drawn OVER the
   // spectrum strip only while keys are held — release and the strip returns).
-  if (g_page == Page::STATS) {
+  if (g_page == Page::STATS && !helpShow_) {
     auto& kbd = M5Cardputer.Keyboard;
     const auto& list = kbd.keyList();
     if (list.size() > 0) {
